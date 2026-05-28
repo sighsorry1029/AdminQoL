@@ -1,88 +1,100 @@
-# Server Sync Mod Template
+# AdminQoL
+Console panel GUI with favorites, Expands vanilla itemsets command via YAML with EpicLoot and Jewelcrafting examples.  Also adds learn/unlearn and clear-inventory commands, suppresses recipe unlock spam, removes equip delay and skill-up effects.
 
-Can be used to already have your project set up and ready to go with ServerSync and basic version checking. Please see the [Original Repository](https://github.com/blaxxun-boop/ServerSync) if you have to update, or have further questions this template might not answer.
+![](https://i.ibb.co/twDb2JjL/Screenshot-2026-05-21-210950.png) <br>
+Search for all the console commands that vanilla and other mods adds. Also you can favorite the commands in groups. <br>
 
-Thank you Blaxxun for ServerSync!
+![](https://i.ibb.co/vvcD8Qkk/Screenshot-2026-05-21-211013.png) <br>
+There is also wooden theme for console panel. You can turn off console panel with f6 by default.
 
-ServerSync
-==========
+![](https://i.ibb.co/hRqG7c73/seticon.png) <br>
+In vanilla, there is console command `itemsets`. Make your own sets for testing. You can edit vanilla sets or make your own sets. Set supports both Epicloot and Jewelcrafting. <br>
 
-Bundling the dll
-----------------
+![](https://i.ibb.co/WWt5wQXT/Video-Project-11.gif) <br>
+Example of calling in built-in sets. Use command `adminqol_clearinventory` to clear your inventory if you need it. <br>
 
-You need to ensure the dll is available to your mod.
+## Features
 
-Including the dll is best done via ILRepack (https://github.com/ravibpatel/ILRepack.Lib.MSBuild.Task). You can load this package (ILRepack.Lib.MSBuild.Task) from NuGet.
+- Suppresses Valheim unlock popup spam from `MessageHud.QueueUnlockMsg`.
+- Can hide skill level-up VFX/SFX and skill level-up alarm messages independently.
+- Optional instant equip/unequip by removing Valheim's timed equip action.
+- Adds admin-only local commands:
+## Features
 
-Then create a file ILRepack.targets in your project folder. File content:
+- Suppresses Valheim unlock popup spam from `MessageHud.QueueUnlockMsg`.
+- Can hide skill level-up VFX/SFX and skill level-up alarm messages independently.
+- Optional instant equip/unequip by removing Valheim's timed equip action.
+- Adds admin-only local commands:
+  - 'itemsets' <itemsetname> itemsetname is defined at `AdminQoL.ItemSets.yml`, `AdminQoL.ItemSets.EpicLoot.yml` and `AdminQoL.ItemSets.Jewelcrafting.yml`
+  - `adminqol_learn <prefab|all>` learns all recipes/discoveries, or a prefab item/build piece/crafting station and its related recipes.
+  - `adminqol_unlearn <prefab|all>` unlearns all known items, or a prefab item/build piece/crafting station and its related recipes.
+  - `adminqol_clearinventory` permanently removes every item entry from the local player's inventory.
+  - `adminqol_itemsets_reload` reloads `AdminQoL.ItemSets.yml`.
+  - `adminqol_itemsets_list` lists currently loaded YAML itemsets.
+- Injects YAML itemsets into Valheim's vanilla `itemset` command, so custom sets work with `itemset <name> [quality] [keep]`.
+- Optional YAML item metadata for Jewelcrafting sockets and EpicLoot magic items when those mods are loaded.
+- EpicLoot set bonuses remain defined by EpicLoot `legendaries.json`; AdminQoL only marks itemset items with the matching EpicLoot IDs.
+- Adds a ConsolePanel command browser to Valheim's F5 console, with command grouping, search, numbered favorite profiles, and F6 show/hide.
+- Does not use ServerSync. This is intentionally a client/admin utility.
+
+## Config
+
+The BepInEx config file is `BepInEx/config/sighsorry.AdminQoL.cfg`.
+
+- `1 - General`: `Require Server Admin` and `Load YAML Item Sets`.
+- `2 - Gameplay QoL`: unlock popup/log suppression, skill level-up effects/alarm removal, and instant equip.
+- `3 - Console Panel`: panel size, visual style, vanilla console bottom offset, mouse cursor release, and toggle key.
+- `4 - Console Panel Favorites`: favorite tab count and favorite command lists.
+
+Learn/unlearn examples:
+
+```text
+adminqol_learn all
+adminqol_learn ShieldWood
+adminqol_learn piece_workbench
+adminqol_unlearn all
+adminqol_unlearn ShieldWood
+adminqol_unlearn piece_workbench
 ```
-<?xml version="1.0" encoding="utf-8"?>
-<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-    <Target Name="ILRepacker" AfterTargets="Build">
-        <ItemGroup>
-            <InputAssemblies Include="$(TargetPath)" />
-            <InputAssemblies Include="$(OutputPath)\ServerSync.dll" />
-        </ItemGroup>
-        <ILRepack Parallel="true" DebugInfo="true" Internalize="true" InputAssemblies="@(InputAssemblies)" OutputFile="$(TargetPath)" TargetKind="SameAsPrimaryAssembly" LibraryPath="$(OutputPath)" />
-    </Target>
-</Project>
+
+Targets match prefab names only. Item targets affect item discovery and matching output recipes; crafting station targets affect the station entry and recipes crafted there. Both full learn and full unlearn use the explicit `all` target, and `all` is included in tab completion.
+
+## YAML Itemsets
+
+On first launch, the mod creates `BepInEx/config/AdminQoL.ItemSets.yml` from Valheim's built-in itemsets. The file is generated once and is never overwritten by AdminQoL after it exists.
+
+AdminQoL also creates and loads these optional example/reference files:
+
+- `BepInEx/config/AdminQoL.ItemSets.EpicLoot.yml`
+- `BepInEx/config/AdminQoL.ItemSets.Jewelcrafting.yml`
+
+All files matching `AdminQoL.ItemSets*.yml` are loaded. The generated EpicLoot file is parsed only when EpicLoot is installed, and the generated Jewelcrafting file is parsed only when Jewelcrafting is installed. Their example entries are copied from all vanilla itemsets, renamed, and expanded with mod-specific blocks. They are `enabled: true` by default; set an entry to `enabled: false` if you do not want it in the `itemset` command.
+
+```yaml
+itemSets:
+  - name: MyAdminSet
+    items:
+      - prefab: SwordIron
+        quality: 4
+        stack: 1
+        use: true
+        hotbarSlot: 1
+    skills:
+      - skill: Swords
+        level: 100
+    knownStations:
+      - piece_workbench
+    knownItems:
+      - Wood
+      - Stone
+    inheritKnownFromItemSet:
+      - Start
 ```
 
-Using the ServerSync
---------------------
+`hotbarSlot` is Valheim's itemset hotbar placement. `1` means hotbar slot 1, `8` means hotbar slot 8, and `0` or an omitted field means no hotbar move.
 
-Declare a variable:
+If a YAML set name matches a vanilla set and `replaceExisting` is true, the YAML definition replaces the vanilla set at runtime. Missing `replaceExisting` is treated as false. Delete a generated file if you want AdminQoL to regenerate that file.
 
-`ServerSync.ConfigSync configSync = new ServerSync.ConfigSync("my.mod.guid") { DisplayName = "My Mod Name", CurrentVersion = "1.2.3", MinimumRequiredVersion = "1.2.0" };`
+Jewelcrafting socket values support exact gem prefab names, `empty`, `random_simple`, `random_advanced`, and `random_perfect`. EpicLoot effects support exact effect IDs or `type: random`; `value: random` rolls through EpicLoot's effect value ranges.
 
-All of DisplayName, CurrentVersion and MinimumRequiredVersion are optional.
-If CurrentVersion is specified, then the user will see a warning in their BepInEx log if the server version does not match the client version.
-If also MinimumRequiredVersion is specified and the client has an older version than the servers MinimumRequiredVersion, the client will be immediately disconnected and see an error message, explaining why.
-To display a friendly name for your mod in the error messages, specify DisplayName, otherwise the primary identifier will be used.
-Also note that the primary identifier (I propose using the GUID, "my.mod.guid") should never be changed (changing it will break backwards compatibility completely).
-
-There are two public methods on the ServerSync.ConfigSync class:
-
-- `AddConfigEntry<T>(ConfigEntry<T> configEntry)`
-
-  Registers a BepInEx ConfigEntry to be synchronized.
-
-- `AddLockingConfigEntry<T>(ConfigEntry<T> lockingConfig) where T : IConvertible`
-
-  Registers a BepInEx ConfigEntry to be synchronized, whose value determines whether the config is locked. If the value is zero when converted to integer, the config is not locked. Otherwise it is locked.
-  This method must be called at most once. If not called at all, the config will never be locked.
-
-Useful properties:
-
-- `static bool ProcessingServerUpdate`
-
-  The mod is receiving and applying configs from the server. Used internally to avoid config writing loops.
-
-- `bool IsSourceOfTruth`
-
-  Whether the local config is currently being used. False if a remote config is currently applied.
-
-Additionally, there is a class `ServerSync.CustomSyncedValue<T>(ConfigSync, string Identifier, T value = default)` to synchronize arbitrary data (more precisely: all data which Valheims native serialization supports).
-This class registers itself to the passed ConfigSync instance upon instantiation.
-It provides a Value property and a ValueChanged event handler.
-The Identifier must be unique for the given ConfigSync instance.
-
-
-Handy config function
----------------------
-
-To avoid manually adding each config entry to the ConfigSync instance, I propose to add a simple wrapper `config()` (with the same signature as `Config.Bind()`) to your UnityBasePlugin class:
-
-```
-ConfigEntry<T> config<T>(string group, string name, T value, ConfigDescription description, bool synchronizedSetting = true)
-{
-    ConfigEntry<T> configEntry = Config.Bind(group, name, value, description);
-
-    SyncedConfigEntry<T> syncedConfigEntry = configSync.AddConfigEntry(configEntry);
-    syncedConfigEntry.SynchronizedConfig = synchronizedSetting;
-
-    return configEntry;
-}
-
-ConfigEntry<T> config<T>(string group, string name, T value, string description, bool synchronizedSetting = true) => config(group, name, value, new ConfigDescription(description), synchronizedSetting);
-```
+AdminQoL does not register EpicLoot set definitions. Define custom EpicLoot sets in EpicLoot's `legendaries.json`, then reference the loaded `legendaryId` and optional `setId` from an `AdminQoL.ItemSets*.yml` file. If `setId` is omitted, AdminQoL asks EpicLoot which loaded set owns that `legendaryId`. The generated `AdminQoL.ItemSets.EpicLoot.yml` documents every supported `epicLoot:` field.

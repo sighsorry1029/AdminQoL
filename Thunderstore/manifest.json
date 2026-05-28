@@ -1,9 +1,9 @@
 {
-  "name": "ServerSyncModTemplate",
-  "version_number": "1.0.0",
-  "website_url": "https://discord.gg/pdHgy6Bsng",
-  "description": "Your mod description goes here. Do not forget to replace the icon.png file with your own. Must be 256x256. Your Readme.md file will be copied from the one in your project folder.",
+  "name": "AdminQoL",
+  "version_number": "1.0.3",
+  "website_url": "https://discord.gg/jkcJCq2sK5",
+  "description": "Console panel GUI with favorites, Expands vanilla itemsets command via YAML with EpicLoot and Jewelcrafting examples.  Also adds learn/unlearn and clear-inventory commands, suppresses recipe unlock spam, removes equip delay and skill-up effects.",
   "dependencies": [
-    "denikson-BepInExPack_Valheim-5.4.2202"
+    "denikson-BepInExPack_Valheim-5.4.2333"
   ]
 }

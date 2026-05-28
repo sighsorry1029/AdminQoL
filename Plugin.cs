@@ -1,204 +1,550 @@
-﻿using System;
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Timers;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
+using ConsolePanel;
 using HarmonyLib;
-using JetBrains.Annotations;
-using ServerSync;
 using UnityEngine;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
 
-namespace ServerSyncModTemplate;
+namespace AdminQoL;
+
+internal static class AdminQoLConfigSections
+{
+    internal const string General = "1 - General";
+    internal const string GameplayQoL = "2 - Gameplay QoL";
+}
 
 [BepInPlugin(ModGUID, ModName, ModVersion)]
-public class ServerSyncModTemplatePlugin : BaseUnityPlugin
+public class AdminQoLPlugin : BaseUnityPlugin
 {
-    internal const string ModName = "ServerSyncModTemplate";
-    internal const string ModVersion = "1.0.0";
-    internal const string Author = "{Azumatt}";
-    private const string ModGUID = $"{Author}.{ModName}";
-    private static string ConfigFileName = $"{ModGUID}.cfg";
-    private static string ConfigFileFullPath = Paths.ConfigPath + Path.DirectorySeparatorChar + ConfigFileName;
-    internal static string ConnectionError = "";
-    private readonly Harmony _harmony = new(ModGUID);
-    public static readonly ManualLogSource ServerSyncModTemplateLogger = BepInEx.Logging.Logger.CreateLogSource(ModName);
-    private static readonly ConfigSync ConfigSync = new(ModGUID) { DisplayName = ModName, CurrentVersion = ModVersion, MinimumRequiredVersion = ModVersion };
-    private FileSystemWatcher _watcher;
-    private readonly object _reloadLock = new();
-    private DateTime _lastConfigReloadTime;
-    private const long RELOAD_DELAY = 10000000; // One second
+    internal const string ModName = "AdminQoL";
+    internal const string ModVersion = "1.0.3";
+    internal const string Author = "sighsorry";
+    internal const string ModGUID = $"{Author}.{ModName}";
 
-    public enum Toggle
-    {
-        On = 1,
-        Off = 0
-    }
+    private static readonly Harmony Harmony = new(ModGUID);
+    internal static readonly ManualLogSource Log = BepInEx.Logging.Logger.CreateLogSource(ModName);
+
+    private static ConfigEntry<bool> _requireServerAdmin = null!;
+    private static ConfigEntry<bool> _suppressUnlockNotifications = null!;
+    private static ConfigEntry<bool> _logSuppressedUnlocks = null!;
+    private static ConfigEntry<bool> _removeSkillLevelUpEffects = null!;
+    private static ConfigEntry<bool> _removeSkillLevelUpAlarm = null!;
+    private static ConfigEntry<bool> _removeEquipDelay = null!;
+    private static ConfigEntry<bool> _loadYamlItemSets = null!;
+
+    private static FileSystemWatcher? _configWatcher;
+    private static FileSystemWatcher? _itemSetWatcher;
+    private static readonly object ReloadLock = new();
+    private static DateTime _lastConfigReloadTime;
+    private static DateTime _lastItemSetReloadTime;
+
+    private static readonly TimeSpan ReloadDebounce = TimeSpan.FromSeconds(1);
+    private const string AdminProbePrefix = "adminqol_admintest_";
+    private const float AdminProbeRetrySeconds = 5f;
+    private const float AdminProbeTimeoutSeconds = 3f;
+    private static ZNet? _adminProbeZNet;
+    private static long _adminProbePlayerId;
+    private static string _adminProbeToken = "";
+    private static bool _adminProbePending;
+    private static bool? _adminProbeVerified;
+    private static float _adminProbeNextTime;
+    private static float _adminProbeDeadline;
 
     public void Awake()
     {
         bool saveOnSet = Config.SaveOnConfigSet;
         Config.SaveOnConfigSet = false;
 
-        // Uncomment the line below to use the LocalizationManager for localizing your mod.
-        // Make sure to populate the English.yml file in the translation folder with your keys to be localized and the values associated before uncommenting!.
-        //Localizer.Load(); // Use this to initialize the LocalizationManager (for more information on LocalizationManager, see the LocalizationManager documentation https://github.com/blaxxun-boop/LocalizationManager#example-project).
+        _requireServerAdmin = Config.Bind(AdminQoLConfigSections.General, "Require Server Admin", true, "Require the local player to be host or listed in the server admin list before AdminQoL commands run.");
+        _loadYamlItemSets = Config.Bind(AdminQoLConfigSections.General, "Load YAML Item Sets", true, "Load AdminQoL.ItemSets.yml and inject those sets into Valheim's vanilla itemset command.");
+        _suppressUnlockNotifications = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Suppress Unlock Notifications", true, "Suppress the top-left unlock popup queue used for new recipes, items, pieces, stations, materials, and trophies.");
+        _logSuppressedUnlocks = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Log Suppressed Unlocks", true, "When unlock popups are suppressed, keep the unlock text in the MessageHud log.");
+        _removeSkillLevelUpEffects = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Remove Skill Level Up Effects", true, "Remove the VFX/SFX played when a skill gains a level.");
+        _removeSkillLevelUpAlarm = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Remove Skill Level Up Alarm", true, "Remove the top-left or center message when a skill gains a level.");
+        _removeEquipDelay = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Remove Equip Delay", true, "Equip and unequip items immediately instead of using Valheim's timed equip action.");
+        ConsolePanelModule.Initialize(gameObject, Config);
 
-        _serverConfigLocked = config("1 - General", "Lock Configuration", Toggle.On, "If on, the configuration is locked and can be changed by server admins only.");
-        _ = ConfigSync.AddLockingConfigEntry(_serverConfigLocked);
+        CustomItemSetManager.Initialize(Paths.ConfigPath);
 
-
-        Assembly assembly = Assembly.GetExecutingAssembly();
-        _harmony.PatchAll(assembly);
-        SetupWatcher();
+        Harmony.PatchAll(Assembly.GetExecutingAssembly());
+        SetupConfigWatcher();
+        SetupItemSetWatcher();
 
         Config.Save();
-        if (saveOnSet)
-        {
-            Config.SaveOnConfigSet = saveOnSet;
-        }
+        Config.SaveOnConfigSet = saveOnSet;
     }
 
     private void OnDestroy()
     {
-        SaveWithRespectToConfigSet();
-        _watcher?.Dispose();
+        ConsolePanelModule.Shutdown();
+        Config.Save();
+        _configWatcher?.Dispose();
+        _itemSetWatcher?.Dispose();
+        Harmony.UnpatchSelf();
     }
 
-    private void SetupWatcher()
+    private void Update()
     {
-        _watcher = new FileSystemWatcher(Paths.ConfigPath, ConfigFileName);
-        _watcher.Changed += ReadConfigValues;
-        _watcher.Created += ReadConfigValues;
-        _watcher.Renamed += ReadConfigValues;
-        _watcher.IncludeSubdirectories = true;
-        _watcher.SynchronizingObject = ThreadingHelper.SynchronizingObject;
-        _watcher.EnableRaisingEvents = true;
+        if (_requireServerAdmin.Value)
+        {
+            PrimeServerAdminProbe();
+        }
     }
 
-    private void ReadConfigValues(object sender, FileSystemEventArgs e)
+    private void SetupConfigWatcher()
+    {
+        string configFileName = $"{ModGUID}.cfg";
+        _configWatcher = new FileSystemWatcher(Paths.ConfigPath, configFileName)
+        {
+            IncludeSubdirectories = false,
+            SynchronizingObject = ThreadingHelper.SynchronizingObject,
+            EnableRaisingEvents = true
+        };
+        _configWatcher.Changed += ReloadConfigAfterFileChange;
+        _configWatcher.Created += ReloadConfigAfterFileChange;
+        _configWatcher.Renamed += ReloadConfigAfterFileChange;
+    }
+
+    private void SetupItemSetWatcher()
+    {
+        _itemSetWatcher = new FileSystemWatcher(Paths.ConfigPath, CustomItemSetManager.FileWatcherFilter)
+        {
+            IncludeSubdirectories = false,
+            SynchronizingObject = ThreadingHelper.SynchronizingObject,
+            EnableRaisingEvents = true
+        };
+        _itemSetWatcher.Changed += ReloadItemSetsAfterFileChange;
+        _itemSetWatcher.Created += ReloadItemSetsAfterFileChange;
+        _itemSetWatcher.Renamed += ReloadItemSetsAfterFileChange;
+    }
+
+    private void ReloadConfigAfterFileChange(object sender, FileSystemEventArgs e)
     {
         DateTime now = DateTime.Now;
-        long time = now.Ticks - _lastConfigReloadTime.Ticks;
-        if (time < RELOAD_DELAY)
+        if (now - _lastConfigReloadTime < ReloadDebounce)
         {
             return;
         }
 
-        lock (_reloadLock)
+        lock (ReloadLock)
         {
-            if (!File.Exists(ConfigFileFullPath))
-            {
-                ServerSyncModTemplateLogger.LogWarning("Config file does not exist. Skipping reload.");
-                return;
-            }
-
             try
             {
-                ServerSyncModTemplateLogger.LogDebug("Reloading configuration...");
-                SaveWithRespectToConfigSet(true);
-                ServerSyncModTemplateLogger.LogInfo("Configuration reload complete.");
+                Config.Reload();
+                Config.Save();
+                Log.LogInfo("Configuration reloaded.");
             }
             catch (Exception ex)
             {
-                ServerSyncModTemplateLogger.LogError($"Error reloading configuration: {ex.Message}");
+                Log.LogError($"Failed to reload configuration: {ex.Message}");
             }
         }
 
         _lastConfigReloadTime = now;
     }
 
-    private void SaveWithRespectToConfigSet(bool reload = false)
+    private void ReloadItemSetsAfterFileChange(object sender, FileSystemEventArgs e)
     {
-        bool originalSaveOnSet = Config.SaveOnConfigSet;
-        Config.SaveOnConfigSet = false;
-        if (reload)
-            Config.Reload();
-        Config.Save();
-        if (originalSaveOnSet)
+        DateTime now = DateTime.Now;
+        if (now - _lastItemSetReloadTime < ReloadDebounce)
         {
-            Config.SaveOnConfigSet = originalSaveOnSet;
+            return;
         }
-        
-        // If you want to do something once localization completes, LocalizationManager has a hook for that.
-        /*Localizer.OnLocalizationComplete += () =>
+
+        CustomItemSetManager.Reload();
+        _lastItemSetReloadTime = now;
+    }
+
+    internal static bool ShouldSuppressUnlockNotifications()
+    {
+        return _suppressUnlockNotifications.Value;
+    }
+
+    internal static bool ShouldLogSuppressedUnlocks()
+    {
+        return _logSuppressedUnlocks.Value;
+    }
+
+    internal static bool ShouldLoadYamlItemSets()
+    {
+        return _loadYamlItemSets.Value;
+    }
+
+    internal static bool ShouldRemoveSkillLevelUpEffects()
+    {
+        return _removeSkillLevelUpEffects.Value;
+    }
+
+    internal static bool ShouldRemoveSkillLevelUpAlarm()
+    {
+        return _removeSkillLevelUpAlarm.Value;
+    }
+
+    internal static bool ShouldRemoveEquipDelay()
+    {
+        return _removeEquipDelay.Value;
+    }
+
+    internal static bool HasAdminAccess()
+    {
+        if (!_requireServerAdmin.Value)
         {
-            // Do something
-            ItemManagerModTemplateLogger.LogDebug("OnLocalizationComplete called");
-        };*/
+            return true;
+        }
+
+        if (ZNet.instance == null)
+        {
+            return true;
+        }
+
+        if (ZNet.instance.IsServer() || ZNet.instance.LocalPlayerIsAdminOrHost())
+        {
+            MarkServerAdminProbeSuccess(ZNet.instance);
+            return true;
+        }
+
+        UpdateServerAdminProbeState();
+        if (_adminProbeVerified == true)
+        {
+            return true;
+        }
+
+        StartServerAdminProbe(force: false);
+        return false;
     }
 
-
-    #region ConfigOptions
-
-    private static ConfigEntry<Toggle> _serverConfigLocked = null!;
-
-    private ConfigEntry<T> config<T>(string group, string name, T value, ConfigDescription description, bool synchronizedSetting = true)
+    internal static string GetAdminAccessDeniedMessage()
     {
-        ConfigDescription extendedDescription = new(description.Description + (synchronizedSetting ? " [Synced with Server]" : " [Not Synced with Server]"), description.AcceptableValues, description.Tags);
-        ConfigEntry<T> configEntry = Config.Bind(group, name, value, extendedDescription);
-        //var configEntry = Config.Bind(group, name, value, description);
+        if (_adminProbePending)
+        {
+            return "AdminQoL is verifying server admin access. Try the command again in a moment.";
+        }
 
-        SyncedConfigEntry<T> syncedConfigEntry = ConfigSync.AddConfigEntry(configEntry);
-        syncedConfigEntry.SynchronizedConfig = synchronizedSetting;
-
-        return configEntry;
+        return "You must be host or a server admin to use this AdminQoL command.";
     }
 
-    private ConfigEntry<T> config<T>(string group, string name, T value, string description, bool synchronizedSetting = true)
+    internal static object RequireAdmin(Terminal.ConsoleEventArgs args, Func<Terminal.ConsoleEventArgs, object> action)
     {
-        return config(group, name, value, new ConfigDescription(description), synchronizedSetting);
+        try
+        {
+            if (!HasAdminAccess())
+            {
+                return GetAdminAccessDeniedMessage();
+            }
+
+            return action(args);
+        }
+        catch (Exception ex)
+        {
+            Log.LogError(ex);
+            return ex.Message;
+        }
     }
 
-    private class ConfigurationManagerAttributes
+    internal static bool HandleServerAdminProbeRemotePrint(string text)
     {
-        [UsedImplicitly] public int? Order = null!;
-        [UsedImplicitly] public bool? Browsable = null!;
-        [UsedImplicitly] public string? Category = null!;
-        [UsedImplicitly] public Action<ConfigEntryBase>? CustomDrawer = null!;
+        if (!_adminProbePending)
+        {
+            return false;
+        }
+
+        if (string.Equals(text, $"Unbanning user {_adminProbeToken}", StringComparison.Ordinal))
+        {
+            MarkServerAdminProbeSuccess(ZNet.instance);
+            return true;
+        }
+
+        if (string.Equals(text, "You are not admin", StringComparison.Ordinal))
+        {
+            _adminProbePending = false;
+            _adminProbeVerified = false;
+            _adminProbeNextTime = Time.realtimeSinceStartup + AdminProbeRetrySeconds;
+            return true;
+        }
+
+        return false;
     }
 
-    class AcceptableShortcuts() : AcceptableValueBase(typeof(KeyboardShortcut))
+    private static void PrimeServerAdminProbe()
     {
-        public override object Clamp(object value) => value;
-        public override bool IsValid(object value) => true;
+        if (ZNet.instance == null || ZNet.instance.IsServer())
+        {
+            ResetServerAdminProbe();
+            return;
+        }
 
-        public override string ToDescriptionString() => $"# Acceptable values: {string.Join(", ", UnityInput.Current.SupportedKeyCodes)}";
+        UpdateServerAdminProbeState();
+        if (_adminProbeVerified == null)
+        {
+            StartServerAdminProbe(force: false);
+        }
     }
 
-    #endregion
+    private static void UpdateServerAdminProbeState()
+    {
+        ZNet? znet = ZNet.instance;
+        long playerId = GetLocalPlayerId();
+        if (!ReferenceEquals(_adminProbeZNet, znet) || _adminProbePlayerId != playerId)
+        {
+            ResetServerAdminProbe();
+            _adminProbeZNet = znet;
+            _adminProbePlayerId = playerId;
+            _adminProbeToken = playerId > 0 ? AdminProbePrefix + playerId.ToString(CultureInfo.InvariantCulture) : "";
+        }
+
+        if (_adminProbePending && Time.realtimeSinceStartup > _adminProbeDeadline)
+        {
+            _adminProbePending = false;
+            _adminProbeVerified = false;
+            _adminProbeNextTime = Time.realtimeSinceStartup + AdminProbeRetrySeconds;
+        }
+    }
+
+    private static void StartServerAdminProbe(bool force)
+    {
+        ZNet? znet = ZNet.instance;
+        if (znet == null || znet.IsServer())
+        {
+            return;
+        }
+
+        UpdateServerAdminProbeState();
+        if (_adminProbePending || string.IsNullOrWhiteSpace(_adminProbeToken))
+        {
+            return;
+        }
+
+        float now = Time.realtimeSinceStartup;
+        if (!force && now < _adminProbeNextTime)
+        {
+            return;
+        }
+
+        try
+        {
+            _adminProbePending = true;
+            _adminProbeDeadline = now + AdminProbeTimeoutSeconds;
+            _adminProbeNextTime = now + AdminProbeRetrySeconds;
+            znet.Unban(_adminProbeToken);
+        }
+        catch (Exception ex)
+        {
+            _adminProbePending = false;
+            _adminProbeVerified = false;
+            _adminProbeNextTime = Time.realtimeSinceStartup + AdminProbeRetrySeconds;
+            Log.LogDebug($"Admin probe failed: {ex.Message}");
+        }
+    }
+
+    private static void MarkServerAdminProbeSuccess(ZNet? znet)
+    {
+        _adminProbeZNet = znet;
+        _adminProbePlayerId = GetLocalPlayerId();
+        _adminProbePending = false;
+        _adminProbeVerified = true;
+        _adminProbeNextTime = Time.realtimeSinceStartup + AdminProbeRetrySeconds;
+    }
+
+    private static void ResetServerAdminProbe()
+    {
+        _adminProbeZNet = null;
+        _adminProbePlayerId = 0;
+        _adminProbeToken = "";
+        _adminProbePending = false;
+        _adminProbeVerified = null;
+        _adminProbeNextTime = 0f;
+        _adminProbeDeadline = 0f;
+    }
+
+    private static long GetLocalPlayerId()
+    {
+        long playerId = Game.instance?.GetPlayerProfile()?.GetPlayerID() ?? 0L;
+        if (playerId != 0L)
+        {
+            return playerId;
+        }
+
+        Player localPlayer = Player.m_localPlayer;
+        return localPlayer != null ? localPlayer.GetPlayerID() : 0L;
+    }
 }
 
-public static class KeyboardExtensions
+[HarmonyPatch(typeof(ZNet), "RPC_RemotePrint")]
+internal static class ServerAdminProbeRemotePrintPatch
 {
-    extension(KeyboardShortcut shortcut)
+    private static bool Prefix(string text)
     {
-        public bool IsKeyDown()
-        {
-            return shortcut.MainKey != KeyCode.None && Input.GetKeyDown(shortcut.MainKey) && shortcut.Modifiers.All(Input.GetKey);
-        }
-
-        public bool IsKeyHeld()
-        {
-            return shortcut.MainKey != KeyCode.None && Input.GetKey(shortcut.MainKey) && shortcut.Modifiers.All(Input.GetKey);
-        }
+        return !AdminQoLPlugin.HandleServerAdminProbeRemotePrint(text);
     }
 }
 
-public static class ToggleExtentions
+[HarmonyPatch(typeof(MessageHud), nameof(MessageHud.QueueUnlockMsg))]
+internal static class SuppressUnlockMessagePatch
 {
-    extension(ServerSyncModTemplatePlugin.Toggle value)
+    private static bool Prefix(MessageHud __instance, string topic, string description)
     {
-        public bool IsOn()
+        if (!AdminQoLPlugin.ShouldSuppressUnlockNotifications())
         {
-            return value == ServerSyncModTemplatePlugin.Toggle.On;
+            return true;
         }
 
-        public bool IsOff()
+        if (AdminQoLPlugin.ShouldLogSuppressedUnlocks())
         {
-            return value == ServerSyncModTemplatePlugin.Toggle.Off;
+            __instance.AddLog($"{topic}: {description}");
+        }
+
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.OnSkillLevelup))]
+internal static class SkillLevelUpEffectsPatch
+{
+    private static bool Prefix()
+    {
+        return !AdminQoLPlugin.ShouldRemoveSkillLevelUpEffects();
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.Message))]
+internal static class SkillLevelUpAlarmPatch
+{
+    private static bool Prefix(string msg)
+    {
+        return !AdminQoLPlugin.ShouldRemoveSkillLevelUpAlarm() || !IsSkillLevelUpMessage(msg);
+    }
+
+    private static bool IsSkillLevelUpMessage(string? msg)
+    {
+        string message = msg ?? "";
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        return message.TrimStart().StartsWith("$msg_skillup ", StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+[HarmonyPatch(typeof(Player), "QueueEquipAction")]
+internal static class InstantEquipActionPatch
+{
+    private static readonly MethodInfo? CancelReloadAction = AccessTools.Method(typeof(Player), "CancelReloadAction");
+
+    private static bool Prefix(Player __instance, ItemDrop.ItemData item)
+    {
+        if (!AdminQoLPlugin.ShouldRemoveEquipDelay())
+        {
+            return true;
+        }
+
+        if (item == null)
+        {
+            return false;
+        }
+
+        if (__instance.IsEquipActionQueued(item))
+        {
+            __instance.RemoveEquipAction(item);
+            return false;
+        }
+
+        CancelReloadAction?.Invoke(__instance, null);
+        __instance.EquipItem(item);
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(Player), "QueueUnequipAction")]
+internal static class InstantUnequipActionPatch
+{
+    private static readonly MethodInfo? CancelReloadAction = AccessTools.Method(typeof(Player), "CancelReloadAction");
+
+    private static bool Prefix(Player __instance, ItemDrop.ItemData item)
+    {
+        if (!AdminQoLPlugin.ShouldRemoveEquipDelay())
+        {
+            return true;
+        }
+
+        if (item == null)
+        {
+            return false;
+        }
+
+        if (__instance.IsEquipActionQueued(item))
+        {
+            __instance.RemoveEquipAction(item);
+            return false;
+        }
+
+        CancelReloadAction?.Invoke(__instance, null);
+        __instance.UnequipItem(item);
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(ItemSets), nameof(ItemSets.Awake))]
+internal static class ItemSetsAwakePatch
+{
+    private static void Postfix(ItemSets __instance)
+    {
+        CustomItemSetManager.ApplyYamlSetsToItemSets(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(ObjectDB), "Awake")]
+internal static class ObjectDBAwakePatch
+{
+    private static void Postfix()
+    {
+        KnowledgeTargetIndex.Invalidate();
+        CustomItemSetManager.ApplyYamlSetsToItemSets(ItemSets.instance);
+    }
+}
+
+[HarmonyPatch(typeof(ItemSets), nameof(ItemSets.TryGetSet))]
+internal static class ItemSetsTryGetSetPatch
+{
+    private static void Prefix(string name, ref ActiveItemSetApplication? __state)
+    {
+        __state = CustomItemSetManager.BeginItemSetApplication(name);
+    }
+
+    private static Exception? Finalizer(Exception? __exception, ActiveItemSetApplication? __state)
+    {
+        CustomItemSetManager.EndItemSetApplication(__state);
+        return __exception;
+    }
+}
+
+[HarmonyPatch(typeof(Inventory), nameof(Inventory.AddItem), new[]
+{
+    typeof(string),
+    typeof(int),
+    typeof(int),
+    typeof(int),
+    typeof(long),
+    typeof(string),
+    typeof(Vector2i),
+    typeof(bool)
+})]
+internal static class InventoryAddItemFromNamePatch
+{
+    private static void Postfix(string name, ItemDrop.ItemData __result)
+    {
+        if (__result != null)
+        {
+            CustomItemSetManager.ApplyItemModifiers(name, __result);
         }
     }
 }
