@@ -220,8 +220,8 @@ internal sealed partial class ConsolePanelController
         bool clickHandledForCurrentPress = false;
         void DispatchClick(bool fromManualMouseDown)
         {
-            bool mouseHeld = IsPrimaryMouseHeld();
-            bool mouseDownThisFrame = fromManualMouseDown || IsPrimaryMouseDown();
+            bool mouseHeld = ConsolePanelPointer.IsPrimaryMouseHeld();
+            bool mouseDownThisFrame = fromManualMouseDown || ConsolePanelPointer.IsPrimaryMouseDown();
             if (clickHandledForCurrentPress && mouseDownThisFrame && lastClickFrame != Time.frameCount)
             {
                 clickHandledForCurrentPress = false;
@@ -508,13 +508,4 @@ internal sealed partial class ConsolePanelController
         image.color = SelectedButtonBackgroundColor(0.84f);
     }
 
-    private static void ApplyDangerButtonColor(Button button)
-    {
-        ColorBlock colors = button.colors;
-        colors.normalColor = new Color(0.42f, 0.16f, 0.10f, 0.95f);
-        colors.highlightedColor = new Color(0.62f, 0.24f, 0.16f, 1f);
-        colors.pressedColor = new Color(0.78f, 0.32f, 0.20f, 1f);
-        colors.selectedColor = colors.highlightedColor;
-        button.colors = colors;
-    }
 }

@@ -17,6 +17,81 @@ using UnityEngine.UI;
 using Object = UnityEngine.Object;
 
 namespace ConsolePanel;
+internal static class ConsolePanelPointer
+{
+    internal static bool IsPrimaryMouseDown()
+    {
+        try
+        {
+            if (ZInput.GetMouseButtonDown(0))
+            {
+                return true;
+            }
+        }
+        catch
+        {
+        }
+
+        return Input.GetMouseButtonDown(0);
+    }
+
+    internal static bool IsPrimaryMouseHeld()
+    {
+        try
+        {
+            return Input.GetMouseButton(0);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static float GetWheelDelta()
+    {
+        try
+        {
+            return Input.mouseScrollDelta.y;
+        }
+        catch
+        {
+            return 0f;
+        }
+    }
+
+    internal static Vector3 GetMousePosition()
+    {
+        try
+        {
+            return ZInput.mousePosition;
+        }
+        catch
+        {
+            return Input.mousePosition;
+        }
+    }
+
+    internal static bool IsActuallyVisible(Transform transform)
+    {
+        for (Transform? current = transform; current != null; current = current.parent)
+        {
+            if (!current.gameObject.activeInHierarchy)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal static bool IsInsideScrollViewport(RectTransform rect, Vector3 mousePosition)
+    {
+        ScrollRect? scrollRect = rect.GetComponentInParent<ScrollRect>();
+        RectTransform? viewport = scrollRect?.viewport;
+        return viewport == null || RectTransformUtility.RectangleContainsScreenPoint(viewport, mousePosition, null);
+    }
+}
+
 internal sealed class ManualClickForwarder : MonoBehaviour
 {
     private Action? _onClick;
@@ -36,7 +111,7 @@ internal sealed class ManualClickForwarder : MonoBehaviour
 
     private void Update()
     {
-        if (!ConsolePanelInputBlock.IsActive || _onClick == null || _rectTransform == null || !IsLeftMouseDown())
+        if (!ConsolePanelInputBlock.IsActive || _onClick == null || _rectTransform == null || !ConsolePanelPointer.IsPrimaryMouseDown())
         {
             return;
         }
@@ -46,18 +121,18 @@ internal sealed class ManualClickForwarder : MonoBehaviour
             return;
         }
 
-        if (!IsActuallyVisible(transform))
+        if (!ConsolePanelPointer.IsActuallyVisible(transform))
         {
             return;
         }
 
-        Vector3 mousePosition = GetMousePosition();
+        Vector3 mousePosition = ConsolePanelPointer.GetMousePosition();
         if (!RectTransformUtility.RectangleContainsScreenPoint(_rectTransform, mousePosition, null))
         {
             return;
         }
 
-        if (!IsInsideScrollViewport(_rectTransform, mousePosition))
+        if (!ConsolePanelPointer.IsInsideScrollViewport(_rectTransform, mousePosition))
         {
             return;
         }
@@ -65,54 +140,6 @@ internal sealed class ManualClickForwarder : MonoBehaviour
         _lastDispatchFrame = Time.frameCount;
         ConsolePanelModule.Diagnostic($"manual click dispatched on '{gameObject.name}' at {mousePosition}");
         _onClick();
-    }
-
-    private static bool IsLeftMouseDown()
-    {
-        try
-        {
-            if (ZInput.GetMouseButtonDown(0))
-            {
-                return true;
-            }
-        }
-        catch
-        {
-        }
-
-        return Input.GetMouseButtonDown(0);
-    }
-
-    private static Vector3 GetMousePosition()
-    {
-        try
-        {
-            return ZInput.mousePosition;
-        }
-        catch
-        {
-            return Input.mousePosition;
-        }
-    }
-
-    private static bool IsActuallyVisible(Transform transform)
-    {
-        for (Transform? current = transform; current != null; current = current.parent)
-        {
-            if (!current.gameObject.activeInHierarchy)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool IsInsideScrollViewport(RectTransform rect, Vector3 mousePosition)
-    {
-        ScrollRect? scrollRect = rect.GetComponentInParent<ScrollRect>();
-        RectTransform? viewport = scrollRect?.viewport;
-        return viewport == null || RectTransformUtility.RectangleContainsScreenPoint(viewport, mousePosition, null);
     }
 }
 internal sealed class ManualHoverTooltip : MonoBehaviour
@@ -154,10 +181,10 @@ internal sealed class ManualHoverTooltip : MonoBehaviour
             return;
         }
 
-        Vector3 mousePosition = GetMousePosition();
-        bool inside = IsActuallyVisible(transform)
+        Vector3 mousePosition = ConsolePanelPointer.GetMousePosition();
+        bool inside = ConsolePanelPointer.IsActuallyVisible(transform)
                       && RectTransformUtility.RectangleContainsScreenPoint(_rectTransform, mousePosition, null)
-                      && IsInsideScrollViewport(_rectTransform, mousePosition);
+                      && ConsolePanelPointer.IsInsideScrollViewport(_rectTransform, mousePosition);
         if (!inside)
         {
             StopHovering();
@@ -177,38 +204,6 @@ internal sealed class ManualHoverTooltip : MonoBehaviour
 
         _hovering = false;
         _hide?.Invoke();
-    }
-
-    private static Vector3 GetMousePosition()
-    {
-        try
-        {
-            return ZInput.mousePosition;
-        }
-        catch
-        {
-            return Input.mousePosition;
-        }
-    }
-
-    private static bool IsActuallyVisible(Transform transform)
-    {
-        for (Transform? current = transform; current != null; current = current.parent)
-        {
-            if (!current.gameObject.activeInHierarchy)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool IsInsideScrollViewport(RectTransform rect, Vector3 mousePosition)
-    {
-        ScrollRect? scrollRect = rect.GetComponentInParent<ScrollRect>();
-        RectTransform? viewport = scrollRect?.viewport;
-        return viewport == null || RectTransformUtility.RectangleContainsScreenPoint(viewport, mousePosition, null);
     }
 }
 internal sealed class ManualScrollForwarder : MonoBehaviour
@@ -235,13 +230,13 @@ internal sealed class ManualScrollForwarder : MonoBehaviour
             return;
         }
 
-        float wheel = GetWheelDelta();
+        float wheel = ConsolePanelPointer.GetWheelDelta();
         if (Mathf.Abs(wheel) < 0.001f)
         {
             return;
         }
 
-        Vector3 mousePosition = GetMousePosition();
+        Vector3 mousePosition = ConsolePanelPointer.GetMousePosition();
         if (!RectTransformUtility.RectangleContainsScreenPoint(_viewport, mousePosition, null))
         {
             return;
@@ -251,29 +246,5 @@ internal sealed class ManualScrollForwarder : MonoBehaviour
         float sensitivity = ConsolePanelLayout.ScrollSensitivity;
         _scrollRect.StopMovement();
         _scrollRect.verticalNormalizedPosition = Mathf.Clamp01(_scrollRect.verticalNormalizedPosition + wheel * sensitivity / scrollablePixels);
-    }
-
-    private static float GetWheelDelta()
-    {
-        try
-        {
-            return Input.mouseScrollDelta.y;
-        }
-        catch
-        {
-            return 0f;
-        }
-    }
-
-    private static Vector3 GetMousePosition()
-    {
-        try
-        {
-            return ZInput.mousePosition;
-        }
-        catch
-        {
-            return Input.mousePosition;
-        }
     }
 }

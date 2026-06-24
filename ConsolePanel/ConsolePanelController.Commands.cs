@@ -368,24 +368,6 @@ internal sealed partial class ConsolePanelController
         }
     }
 
-    private void RebuildCommandLayout(bool resetScroll)
-    {
-        if (_commandContent is RectTransform contentRect)
-        {
-            LayoutRebuilder.ForceRebuildLayoutImmediate(contentRect);
-            Canvas.ForceUpdateCanvases();
-            if (resetScroll)
-            {
-                ResetScrollToTop(_commandScrollRect, contentRect);
-            }
-
-            RectTransform? viewportRect = _commandScrollRect?.viewport;
-            ConsolePanelModule.Diagnostic(
-                $"rebuilt command layout: children={contentRect.childCount}, height={contentRect.rect.height:0.0}, " +
-                $"contentPos={contentRect.anchoredPosition}, viewport={viewportRect?.rect.size.ToString() ?? "null"}, active={contentRect.gameObject.activeInHierarchy}");
-        }
-    }
-
     private static void ResetScrollToTop(ScrollRect? scrollRect, RectTransform contentRect)
     {
         contentRect.anchoredPosition = Vector2.zero;
@@ -396,32 +378,6 @@ internal sealed partial class ConsolePanelController
 
         scrollRect.StopMovement();
         scrollRect.verticalNormalizedPosition = 1f;
-    }
-
-    private void CreateInfoRow(Transform parent, string text, bool muted = false)
-    {
-        GameObject row = CreateUiObject("InfoRow", parent);
-        LayoutElement rowLayout = row.AddComponent<LayoutElement>();
-        rowLayout.minHeight = ConsolePanelLayout.RowHeight;
-        rowLayout.preferredHeight = ConsolePanelLayout.RowHeight;
-        Image image = row.AddComponent<Image>();
-        ApplySurfaceImage(image, muted ? SurfaceRole.MutedInfo : SurfaceRole.Info, muted ? new Color(0f, 0f, 0f, 0.18f) : new Color(0f, 0f, 0f, 0.38f));
-
-        GameObject labelObject = CreateUiObject("Label", row.transform);
-        RectTransform labelRect = labelObject.GetComponent<RectTransform>();
-        Stretch(labelRect);
-        labelRect.offsetMin = new Vector2(8f, 2f);
-        labelRect.offsetMax = new Vector2(-8f, -2f);
-        EnsureTmpDefaultFont();
-        TextMeshProUGUI label = labelObject.AddComponent<TextMeshProUGUI>();
-        label.font = _font;
-        label.text = text;
-        label.fontSize = muted ? 13f : 15f;
-        label.color = muted ? new Color(0.78f, 0.70f, 0.55f, 1f) : new Color(1f, 0.86f, 0.36f, 1f);
-        label.alignment = TextAlignmentOptions.MidlineLeft;
-        label.textWrappingMode = TextWrappingModes.NoWrap;
-        label.overflowMode = TextOverflowModes.Ellipsis;
-        label.raycastTarget = false;
     }
 
     private RectTransform CreateHeaderLabel(RectTransform parent, out TextMeshProUGUI label)
@@ -503,53 +459,6 @@ internal sealed partial class ConsolePanelController
         }
 
         return new CommandEntry(command, "", FavoriteOwner(favoriteIndex));
-    }
-
-    private void CreateCommandRow(Transform parent, CommandEntry entry)
-    {
-        GameObject row = CreateUiObject("CommandRow", parent);
-        LayoutElement rowLayout = row.AddComponent<LayoutElement>();
-        rowLayout.minHeight = ConsolePanelLayout.RowHeight;
-        rowLayout.preferredHeight = ConsolePanelLayout.RowHeight;
-        HorizontalLayoutGroup layout = row.AddComponent<HorizontalLayoutGroup>();
-        layout.spacing = 6f;
-        layout.padding = new RectOffset(4, 4, 2, 2);
-        layout.childControlHeight = true;
-        layout.childControlWidth = true;
-        layout.childForceExpandHeight = true;
-        layout.childForceExpandWidth = false;
-
-        Button commandButton = CreateButton(row.transform, FormatCommandRowText(entry), () => PutCommandInInput(entry));
-        if (ShouldShowCommandSourceTooltip())
-        {
-            commandButton.gameObject.AddComponent<ManualHoverTooltip>().Configure($"Source: {entry.Owner}", ShowOwnerTooltip, HideOwnerTooltip);
-        }
-
-        LayoutElement commandLayout = commandButton.gameObject.AddComponent<LayoutElement>();
-        commandLayout.flexibleWidth = 1f;
-
-        GameObject actions = CreateUiObject("FavoriteActions", row.transform);
-        HorizontalLayoutGroup actionLayout = actions.AddComponent<HorizontalLayoutGroup>();
-        actionLayout.spacing = ConsolePanelLayout.FavoriteActionSpacing;
-        actionLayout.padding = new RectOffset(0, 0, 0, 0);
-        actionLayout.childControlHeight = true;
-        actionLayout.childControlWidth = true;
-        actionLayout.childForceExpandHeight = true;
-        actionLayout.childForceExpandWidth = false;
-        actionLayout.childAlignment = TextAnchor.MiddleCenter;
-        LayoutElement actionElement = actions.AddComponent<LayoutElement>();
-        float actionWidth = GetFavoriteActionAreaWidth();
-        actionElement.minWidth = actionWidth;
-        actionElement.preferredWidth = actionWidth;
-        actionElement.flexibleWidth = 0f;
-
-        for (int i = 0; i < GetFavoriteTabCount(); i++)
-        {
-            int targetIndex = i;
-            Button tabButton = CreateFavoriteActionButton(actions.transform, (i + 1).ToString(), () => ToggleFavorite(targetIndex, entry.Command));
-            RegisterFavoriteActionButton(entry.Command, targetIndex, tabButton);
-            ApplySelectedButtonColor(tabButton, IsFavoriteInTab(targetIndex, entry.Command));
-        }
     }
 
     private static string FormatCommandRowText(CommandEntry entry)

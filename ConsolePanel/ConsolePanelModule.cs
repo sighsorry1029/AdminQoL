@@ -35,12 +35,12 @@ internal static class ConsolePanelModule
     internal static void Initialize(GameObject host, ConfigFile config)
     {
         ConfigFile = config;
-        PanelWidth = config.Bind(ConsolePanelConfig.PanelSection, "Panel Width", ConsolePanelLayout.DefaultPanelWidth, "Width of the command browser panel.");
-        PanelHeight = config.Bind(ConsolePanelConfig.PanelSection, "Panel Height", ConsolePanelLayout.DefaultPanelHeight, "Maximum height of the command browser panel. The panel shrinks if needed to preserve the fixed gap below the console.");
-        VanillaConsoleBottomOffset = config.Bind(ConsolePanelConfig.PanelSection, "Vanilla Console Bottom Offset", ConsolePanelLayout.DefaultVanillaConsoleBottomOffset, "Bottom Y offset applied to Valheim's own console rect while the console is visible.");
-        VisualStyle = config.Bind(ConsolePanelConfig.PanelSection, "Panel Visual Style", PanelVisualStyle.Modern, "Visual style for ConsolePanel. Wood uses Valheim-style wood panels, Modern uses ConfigurationManager-like flat panels.");
-        ReleaseMouseCursor = config.Bind(ConsolePanelConfig.PanelSection, "Release Mouse Cursor", true, "Unlock and show the mouse cursor while the F5 console panel is visible so category, command, and favorite buttons can be clicked.");
-        TogglePanelKey = config.Bind(ConsolePanelConfig.PanelSection, "Toggle Panel Key", new KeyboardShortcut(KeyCode.F6), "Keyboard shortcut that toggles ConsolePanel while Valheim's F5 console is visible.");
+        VisualStyle = config.Bind(ConsolePanelConfig.PanelSection, "Panel Visual Style", PanelVisualStyle.Modern, OrderedDescription("Visual style for ConsolePanel. Off disables ConsolePanel entirely, Wood uses Valheim-style wood panels, Modern uses ConfigurationManager-like flat panels.", 600));
+        TogglePanelKey = config.Bind(ConsolePanelConfig.PanelSection, "Toggle Panel Key", new KeyboardShortcut(KeyCode.F6), OrderedDescription("Keyboard shortcut that toggles ConsolePanel while Valheim's F5 console is visible.", 500));
+        PanelWidth = config.Bind(ConsolePanelConfig.PanelSection, "Panel Width", ConsolePanelLayout.DefaultPanelWidth, OrderedDescription("Width of the command browser panel.", 400));
+        PanelHeight = config.Bind(ConsolePanelConfig.PanelSection, "Panel Height", ConsolePanelLayout.DefaultPanelHeight, OrderedDescription("Maximum height of the command browser panel. The panel shrinks if needed to preserve the fixed gap below the console.", 300));
+        VanillaConsoleBottomOffset = config.Bind(ConsolePanelConfig.PanelSection, "Vanilla Console Bottom Offset", ConsolePanelLayout.DefaultVanillaConsoleBottomOffset, OrderedDescription("Bottom Y offset applied to Valheim's own console rect while the console panel is visible.", 200));
+        ReleaseMouseCursor = config.Bind(ConsolePanelConfig.PanelSection, "Release Mouse Cursor", true, OrderedDescription("Unlock and show the mouse cursor while the F5 console panel is visible so category, command, and favorite buttons can be clicked.", 100));
         FavoriteTabCount = config.Bind(ConsolePanelConfig.FavoritesSection, "Favorite Tab Count", 3, new ConfigDescription("Number of numbered favorite command tabs to show.", new AcceptableValueRange<int>(1, ConsolePanelLayout.MaxFavoriteTabs)));
         FavoriteTabCommands = new ConfigEntry<string>[ConsolePanelLayout.MaxFavoriteTabs];
         for (int i = 0; i < ConsolePanelLayout.MaxFavoriteTabs; i++)
@@ -103,8 +103,19 @@ internal static class ConsolePanelModule
         }
     }
 
+    [Conditional("ADMINQOL_DIAGNOSTICS")]
     internal static void Diagnostic(string message)
     {
+    }
+
+    private static ConfigDescription OrderedDescription(string description, int order)
+    {
+        return new ConfigDescription(description, null, new ConfigurationManagerAttributes { Order = order });
+    }
+
+    private sealed class ConfigurationManagerAttributes
+    {
+        public int? Order { get; set; }
     }
 }
 [HarmonyPatch]
@@ -351,8 +362,14 @@ internal sealed partial class ConsolePanelController : MonoBehaviour
 
     private static bool ShouldManageVanillaConsole()
     {
-        return global::Console.IsVisible()
+        return IsPanelEnabled()
+               && global::Console.IsVisible()
                && global::Console.instance != null;
+    }
+
+    private static bool IsPanelEnabled()
+    {
+        return ConsolePanelModule.VisualStyle.Value != PanelVisualStyle.Off;
     }
 
     private bool ShouldShowPanel()

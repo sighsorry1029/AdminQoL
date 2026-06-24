@@ -150,7 +150,6 @@
         <Compile Include="ConsolePanel\ConsolePanelController.View.cs"/>
         <Compile Include="ConsolePanel\ConsolePanelFavoriteStore.cs"/>
         <Compile Include="ConsolePanel\ManualInputForwarders.cs"/>
-        <Compile Include="LocalizationManager.cs"/>
         <Compile Include="Plugin.cs"/>
         <Compile Include="Properties\AssemblyInfo.cs"/>
     </ItemGroup>
@@ -163,7 +162,6 @@
         <Content Include="Thunderstore\CHANGELOG.md"/>
         <Content Include="Thunderstore\icon.png"/>
         <Content Include="Thunderstore\manifest.json"/>
-        <EmbeddedResource Include="translations\English.yml"/>
         <Content Include="UpdateManifest.ps1"/>
     </ItemGroup>
     <ItemGroup>

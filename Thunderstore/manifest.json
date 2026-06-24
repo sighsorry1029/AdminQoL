@@ -1,6 +1,6 @@
 {
   "name": "AdminQoL",
-  "version_number": "1.0.3",
+  "version_number": "1.0.4",
   "website_url": "https://discord.gg/jkcJCq2sK5",
   "description": "Console panel GUI with favorites, Expands vanilla itemsets command via YAML with EpicLoot and Jewelcrafting examples.  Also adds learn/unlearn and clear-inventory commands, suppresses recipe unlock spam, removes equip delay and skill-up effects.",
   "dependencies": [

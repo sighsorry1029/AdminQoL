@@ -26,7 +26,7 @@ internal static class AdminQoLConfigSections
 public class AdminQoLPlugin : BaseUnityPlugin
 {
     internal const string ModName = "AdminQoL";
-    internal const string ModVersion = "1.0.3";
+    internal const string ModVersion = "1.0.4";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
 
@@ -39,6 +39,8 @@ public class AdminQoLPlugin : BaseUnityPlugin
     private static ConfigEntry<bool> _removeSkillLevelUpEffects = null!;
     private static ConfigEntry<bool> _removeSkillLevelUpAlarm = null!;
     private static ConfigEntry<bool> _removeEquipDelay = null!;
+    private static ConfigEntry<bool> _preventDurabilityLossFromDamage = null!;
+    private static ConfigEntry<bool> _preventDurabilityLossFromUse = null!;
     private static ConfigEntry<bool> _loadYamlItemSets = null!;
 
     private static FileSystemWatcher? _configWatcher;
@@ -58,6 +60,8 @@ public class AdminQoLPlugin : BaseUnityPlugin
     private static bool? _adminProbeVerified;
     private static float _adminProbeNextTime;
     private static float _adminProbeDeadline;
+    private static int _durabilityAdminAccessFrame = -1;
+    private static bool _durabilityAdminAccess;
 
     public void Awake()
     {
@@ -71,30 +75,34 @@ public class AdminQoLPlugin : BaseUnityPlugin
         _removeSkillLevelUpEffects = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Remove Skill Level Up Effects", true, "Remove the VFX/SFX played when a skill gains a level.");
         _removeSkillLevelUpAlarm = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Remove Skill Level Up Alarm", true, "Remove the top-left or center message when a skill gains a level.");
         _removeEquipDelay = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Remove Equip Delay", true, "Equip and unequip items immediately instead of using Valheim's timed equip action.");
+        _preventDurabilityLossFromDamage = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Prevent Durability Loss From Damage", false, "Admin-only. Prevent equipped armor durability loss caused by taking damage.");
+        _preventDurabilityLossFromUse = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Prevent Durability Loss From Use", false, "Admin-only. Prevent equipped item durability loss caused by attacking, blocking, building, repairing, or passive use drain.");
         ConsolePanelModule.Initialize(gameObject, Config);
 
         CustomItemSetManager.Initialize(Paths.ConfigPath);
 
         Harmony.PatchAll(Assembly.GetExecutingAssembly());
-        SetupConfigWatcher();
-        SetupItemSetWatcher();
-
         Config.Save();
         Config.SaveOnConfigSet = saveOnSet;
+
+        SetupConfigWatcher();
+        SetupItemSetWatcher();
     }
 
     private void OnDestroy()
     {
         ConsolePanelModule.Shutdown();
-        Config.Save();
         _configWatcher?.Dispose();
         _itemSetWatcher?.Dispose();
+        _configWatcher = null;
+        _itemSetWatcher = null;
+        Config.Save();
         Harmony.UnpatchSelf();
     }
 
     private void Update()
     {
-        if (_requireServerAdmin.Value)
+        if (_requireServerAdmin.Value || _preventDurabilityLossFromDamage.Value || _preventDurabilityLossFromUse.Value)
         {
             PrimeServerAdminProbe();
         }
@@ -129,18 +137,19 @@ public class AdminQoLPlugin : BaseUnityPlugin
 
     private void ReloadConfigAfterFileChange(object sender, FileSystemEventArgs e)
     {
-        DateTime now = DateTime.Now;
-        if (now - _lastConfigReloadTime < ReloadDebounce)
-        {
-            return;
-        }
-
         lock (ReloadLock)
         {
+            DateTime now = DateTime.Now;
+            if (now - _lastConfigReloadTime < ReloadDebounce)
+            {
+                return;
+            }
+
+            _lastConfigReloadTime = now;
+
             try
             {
                 Config.Reload();
-                Config.Save();
                 Log.LogInfo("Configuration reloaded.");
             }
             catch (Exception ex)
@@ -148,8 +157,6 @@ public class AdminQoLPlugin : BaseUnityPlugin
                 Log.LogError($"Failed to reload configuration: {ex.Message}");
             }
         }
-
-        _lastConfigReloadTime = now;
     }
 
     private void ReloadItemSetsAfterFileChange(object sender, FileSystemEventArgs e)
@@ -194,13 +201,34 @@ public class AdminQoLPlugin : BaseUnityPlugin
         return _removeEquipDelay.Value;
     }
 
+    internal static bool ShouldPreventDurabilityLossFromDamage(Player player)
+    {
+        return _preventDurabilityLossFromDamage.Value
+               && IsLocalPlayer(player)
+               && HasCachedServerAdminAccessForDurability();
+    }
+
+    internal static bool ShouldPreventDurabilityLossFromUse(Humanoid humanoid)
+    {
+        return _preventDurabilityLossFromUse.Value
+               && IsLocalPlayer(humanoid)
+               && HasCachedServerAdminAccessForDurability();
+    }
+
+    internal static ItemDurabilitySnapshot CaptureDurabilityForUse(Humanoid humanoid, ItemDrop.ItemData item)
+    {
+        return ShouldPreventDurabilityLossFromUse(humanoid)
+            ? new ItemDurabilitySnapshot(item)
+            : default;
+    }
+
     internal static bool HasAdminAccess()
     {
-        if (!_requireServerAdmin.Value)
-        {
-            return true;
-        }
+        return !_requireServerAdmin.Value || HasServerAdminAccess();
+    }
 
+    private static bool HasServerAdminAccess()
+    {
         if (ZNet.instance == null)
         {
             return true;
@@ -220,6 +248,24 @@ public class AdminQoLPlugin : BaseUnityPlugin
 
         StartServerAdminProbe(force: false);
         return false;
+    }
+
+    private static bool HasCachedServerAdminAccessForDurability()
+    {
+        int frame = Time.frameCount;
+        if (_durabilityAdminAccessFrame == frame)
+        {
+            return _durabilityAdminAccess;
+        }
+
+        _durabilityAdminAccessFrame = frame;
+        _durabilityAdminAccess = HasServerAdminAccess();
+        return _durabilityAdminAccess;
+    }
+
+    private static bool IsLocalPlayer(Humanoid humanoid)
+    {
+        return humanoid is Player player && player == Player.m_localPlayer;
     }
 
     internal static string GetAdminAccessDeniedMessage()
@@ -387,6 +433,26 @@ internal static class ServerAdminProbeRemotePrintPatch
     }
 }
 
+internal readonly struct ItemDurabilitySnapshot
+{
+    private readonly ItemDrop.ItemData? _item;
+    private readonly float _durability;
+
+    internal ItemDurabilitySnapshot(ItemDrop.ItemData? item)
+    {
+        _item = item;
+        _durability = item?.m_durability ?? 0f;
+    }
+
+    internal void RestoreLoss()
+    {
+        if (_item != null && _item.m_durability < _durability)
+        {
+            _item.m_durability = _durability;
+        }
+    }
+}
+
 [HarmonyPatch(typeof(MessageHud), nameof(MessageHud.QueueUnlockMsg))]
 internal static class SuppressUnlockMessagePatch
 {
@@ -432,6 +498,88 @@ internal static class SkillLevelUpAlarmPatch
         }
 
         return message.TrimStart().StartsWith("$msg_skillup ", StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.DamageArmorDurability))]
+internal static class PreventArmorDurabilityLossFromDamagePatch
+{
+    private static bool Prefix(Player __instance)
+    {
+        return !AdminQoLPlugin.ShouldPreventDurabilityLossFromDamage(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(Humanoid), "DrainEquipedItemDurability")]
+internal static class PreventPassiveDurabilityLossFromUsePatch
+{
+    private static bool Prefix(Humanoid __instance)
+    {
+        return !AdminQoLPlugin.ShouldPreventDurabilityLossFromUse(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(Humanoid), nameof(Humanoid.BlockAttack), new[] { typeof(HitData), typeof(Character) })]
+internal static class PreventBlockDurabilityLossFromUsePatch
+{
+    private static void Prefix(Humanoid __instance, ref ItemDurabilitySnapshot __state)
+    {
+        __state = AdminQoLPlugin.CaptureDurabilityForUse(__instance, __instance.GetCurrentBlocker());
+    }
+
+    private static void Postfix(ItemDurabilitySnapshot __state)
+    {
+        __state.RestoreLoss();
+    }
+}
+
+[HarmonyPatch]
+internal static class PreventAttackDurabilityLossFromUsePatch
+{
+    private static IEnumerable<MethodBase> TargetMethods()
+    {
+        yield return AccessTools.Method(typeof(Attack), nameof(Attack.ProjectileAttackTriggered));
+        yield return AccessTools.Method(typeof(Attack), nameof(Attack.DoNonAttack));
+        yield return AccessTools.Method(typeof(Attack), nameof(Attack.DoAreaAttack));
+        yield return AccessTools.Method(typeof(Attack), nameof(Attack.DoMeleeAttack));
+    }
+
+    private static void Prefix(Attack __instance, ref ItemDurabilitySnapshot __state)
+    {
+        __state = AdminQoLPlugin.CaptureDurabilityForUse(__instance.m_character, __instance.m_weapon);
+    }
+
+    private static void Postfix(ItemDurabilitySnapshot __state)
+    {
+        __state.RestoreLoss();
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.UpdatePlacement), new[] { typeof(bool), typeof(float) })]
+internal static class PreventPlacementDurabilityLossFromUsePatch
+{
+    private static void Prefix(Player __instance, ref ItemDurabilitySnapshot __state)
+    {
+        __state = AdminQoLPlugin.CaptureDurabilityForUse(__instance, __instance.GetRightItem());
+    }
+
+    private static void Postfix(ItemDurabilitySnapshot __state)
+    {
+        __state.RestoreLoss();
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.Repair), new[] { typeof(ItemDrop.ItemData), typeof(Piece) })]
+internal static class PreventRepairDurabilityLossFromUsePatch
+{
+    private static void Prefix(Player __instance, ItemDrop.ItemData toolItem, ref ItemDurabilitySnapshot __state)
+    {
+        __state = AdminQoLPlugin.CaptureDurabilityForUse(__instance, toolItem);
+    }
+
+    private static void Postfix(ItemDurabilitySnapshot __state)
+    {
+        __state.RestoreLoss();
     }
 }
 

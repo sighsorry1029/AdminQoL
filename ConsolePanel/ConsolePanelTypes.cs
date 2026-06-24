@@ -19,6 +19,7 @@ using Object = UnityEngine.Object;
 namespace ConsolePanel;
 internal enum PanelVisualStyle
 {
+    Off,
     Wood,
     Modern
 }

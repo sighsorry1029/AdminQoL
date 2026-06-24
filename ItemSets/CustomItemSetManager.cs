@@ -34,6 +34,8 @@ internal static partial class CustomItemSetManager
     private static string _jewelcraftingFilePath = "";
     private static ItemSets? _snapshotSource;
     private static List<ItemSets.ItemSet>? _originalSets;
+    private static List<ItemSets.ItemSet> _appliedItemSets = new();
+    private static List<(ItemSets.ItemSet Set, int Index)> _replacedItemSets = new();
     private static List<string> _loadedSetNames = new();
     private static Dictionary<string, List<ItemSetItemModifier>> _itemModifiersBySetName = new(StringComparer.OrdinalIgnoreCase);
 
@@ -57,36 +59,33 @@ internal static partial class CustomItemSetManager
 
     internal static void Reload()
     {
-        lock (ApplyLock)
-        {
-            _loadedSetNames = new List<string>();
-            _itemModifiersBySetName = new Dictionary<string, List<ItemSetItemModifier>>(StringComparer.OrdinalIgnoreCase);
-        }
-
         ApplyYamlSetsToItemSets(ItemSets.instance);
     }
 
     internal static void ApplyYamlSetsToItemSets(ItemSets? itemSets)
     {
-        if (!AdminQoLPlugin.ShouldLoadYamlItemSets() || itemSets == null || ObjectDB.instance == null)
+        if (itemSets == null)
         {
             return;
         }
 
         lock (ApplyLock)
         {
-            if (_originalSets == null || !ReferenceEquals(_snapshotSource, itemSets))
-            {
-                _snapshotSource = itemSets;
-                _originalSets = itemSets.m_sets.ToList();
-            }
+            EnsureSnapshot(itemSets);
+            RestorePreviousApplication(itemSets);
 
-            itemSets.m_sets.Clear();
-            itemSets.m_sets.AddRange(_originalSets);
+            if (!AdminQoLPlugin.ShouldLoadYamlItemSets() || ObjectDB.instance == null)
+            {
+                _loadedSetNames = new List<string>();
+                _itemModifiersBySetName = new Dictionary<string, List<ItemSetItemModifier>>(StringComparer.OrdinalIgnoreCase);
+                return;
+            }
 
             List<YamlItemSet> yamlSets = LoadConfig();
 
             List<string> loadedNames = new();
+            List<ItemSets.ItemSet> appliedItemSets = new();
+            List<(ItemSets.ItemSet Set, int Index)> replacedItemSets = new();
             Dictionary<string, List<ItemSetItemModifier>> modifiersBySetName = new(StringComparer.OrdinalIgnoreCase);
 
             foreach (YamlItemSet yamlSet in yamlSets)
@@ -104,9 +103,14 @@ internal static partial class CustomItemSetManager
 
                 if (yamlSet.ReplaceExisting == true)
                 {
-                    itemSets.m_sets.RemoveAll(set => string.Equals(set.m_name, yamlSet.Name, StringComparison.OrdinalIgnoreCase));
+                    List<(ItemSets.ItemSet Set, int Index)> replacedSets = itemSets.m_sets
+                        .Select((set, index) => (Set: set, Index: index))
+                        .Where(entry => IsNamedSet(entry.Set, yamlSet.Name) && !appliedItemSets.Any(appliedSet => ReferenceEquals(appliedSet, entry.Set)))
+                        .ToList();
+                    replacedItemSets.AddRange(replacedSets);
+                    itemSets.m_sets.RemoveAll(set => IsNamedSet(set, yamlSet.Name));
                 }
-                else if (itemSets.m_sets.Any(set => string.Equals(set.m_name, yamlSet.Name, StringComparison.OrdinalIgnoreCase)))
+                else if (itemSets.m_sets.Any(set => IsNamedSet(set, yamlSet.Name)))
                 {
                     AdminQoLPlugin.Log.LogWarning($"Skipped YAML itemset '{yamlSet.Name}' because a set with that name already exists.");
                     continue;
@@ -114,6 +118,7 @@ internal static partial class CustomItemSetManager
 
                 ItemSets.ItemSet itemSet = BuildItemSet(yamlSet, out List<ItemSetItemModifier> itemModifiers);
                 itemSets.m_sets.Add(itemSet);
+                appliedItemSets.Add(itemSet);
                 loadedNames.Add(itemSet.m_name);
 
                 if (itemModifiers.Any(modifier => modifier.HasModData))
@@ -122,10 +127,52 @@ internal static partial class CustomItemSetManager
                 }
             }
 
+            _appliedItemSets = appliedItemSets;
+            _replacedItemSets = replacedItemSets;
             _loadedSetNames = loadedNames;
             _itemModifiersBySetName = modifiersBySetName;
             AdminQoLPlugin.Log.LogInfo($"Loaded {_loadedSetNames.Count} YAML itemsets.");
         }
+    }
+
+    private static void EnsureSnapshot(ItemSets itemSets)
+    {
+        if (_originalSets != null && ReferenceEquals(_snapshotSource, itemSets))
+        {
+            return;
+        }
+
+        _snapshotSource = itemSets;
+        _originalSets = itemSets.m_sets.ToList();
+        _appliedItemSets = new List<ItemSets.ItemSet>();
+        _replacedItemSets = new List<(ItemSets.ItemSet Set, int Index)>();
+        _loadedSetNames = new List<string>();
+        _itemModifiersBySetName = new Dictionary<string, List<ItemSetItemModifier>>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void RestorePreviousApplication(ItemSets itemSets)
+    {
+        if (_appliedItemSets.Count > 0)
+        {
+            itemSets.m_sets.RemoveAll(set => _appliedItemSets.Any(appliedSet => ReferenceEquals(appliedSet, set)));
+        }
+
+        foreach ((ItemSets.ItemSet Set, int Index) replacedSet in _replacedItemSets.OrderBy(entry => entry.Index))
+        {
+            if (replacedSet.Set != null && !itemSets.m_sets.Any(set => ReferenceEquals(set, replacedSet.Set)))
+            {
+                int index = Math.Min(Math.Max(replacedSet.Index, 0), itemSets.m_sets.Count);
+                itemSets.m_sets.Insert(index, replacedSet.Set);
+            }
+        }
+
+        _appliedItemSets = new List<ItemSets.ItemSet>();
+        _replacedItemSets = new List<(ItemSets.ItemSet Set, int Index)>();
+    }
+
+    private static bool IsNamedSet(ItemSets.ItemSet? itemSet, string name)
+    {
+        return itemSet != null && string.Equals(itemSet.m_name, name, StringComparison.OrdinalIgnoreCase);
     }
 
     internal static ActiveItemSetApplication? BeginItemSetApplication(string setName)
@@ -163,8 +210,4 @@ internal static partial class CustomItemSetManager
     {
         _activeApplication?.ApplyNext(prefabName, itemData);
     }
-
-
-
-
 }

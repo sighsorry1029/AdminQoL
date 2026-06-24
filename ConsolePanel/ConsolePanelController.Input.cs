@@ -65,7 +65,7 @@ internal sealed partial class ConsolePanelController
 
     private bool ReleaseSearchFocusForConsoleClick()
     {
-        if (!_searchInputWanted || !IsPrimaryMouseDown())
+        if (!_searchInputWanted || !ConsolePanelPointer.IsPrimaryMouseDown())
         {
             return false;
         }
@@ -175,47 +175,7 @@ internal sealed partial class ConsolePanelController
             return false;
         }
 
-        return RectTransformUtility.RectangleContainsScreenPoint(inputRect, GetMousePosition(), null);
-    }
-
-    private static bool IsPrimaryMouseDown()
-    {
-        try
-        {
-            if (ZInput.GetMouseButtonDown(0))
-            {
-                return true;
-            }
-        }
-        catch
-        {
-        }
-
-        return Input.GetMouseButtonDown(0);
-    }
-
-    private static bool IsPrimaryMouseHeld()
-    {
-        try
-        {
-            return Input.GetMouseButton(0);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static Vector3 GetMousePosition()
-    {
-        try
-        {
-            return ZInput.mousePosition;
-        }
-        catch
-        {
-            return Input.mousePosition;
-        }
+        return RectTransformUtility.RectangleContainsScreenPoint(inputRect, ConsolePanelPointer.GetMousePosition(), null);
     }
 
     private static TMP_InputField? GetConsoleInputField()
