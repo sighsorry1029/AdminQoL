@@ -26,7 +26,7 @@ internal static class AdminQoLConfigSections
 public class AdminQoLPlugin : BaseUnityPlugin
 {
     internal const string ModName = "AdminQoL";
-    internal const string ModVersion = "1.0.4";
+    internal const string ModVersion = "1.0.5";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
 
@@ -39,6 +39,7 @@ public class AdminQoLPlugin : BaseUnityPlugin
     private static ConfigEntry<bool> _removeSkillLevelUpEffects = null!;
     private static ConfigEntry<bool> _removeSkillLevelUpAlarm = null!;
     private static ConfigEntry<bool> _removeEquipDelay = null!;
+    private static ConfigEntry<bool> _ignoreCraftingStationRoofRequirement = null!;
     private static ConfigEntry<bool> _preventDurabilityLossFromDamage = null!;
     private static ConfigEntry<bool> _preventDurabilityLossFromUse = null!;
     private static ConfigEntry<bool> _loadYamlItemSets = null!;
@@ -60,8 +61,8 @@ public class AdminQoLPlugin : BaseUnityPlugin
     private static bool? _adminProbeVerified;
     private static float _adminProbeNextTime;
     private static float _adminProbeDeadline;
-    private static int _durabilityAdminAccessFrame = -1;
-    private static bool _durabilityAdminAccess;
+    private static int _adminOnlyFeatureAccessFrame = -1;
+    private static bool _adminOnlyFeatureAccess;
 
     public void Awake()
     {
@@ -75,8 +76,9 @@ public class AdminQoLPlugin : BaseUnityPlugin
         _removeSkillLevelUpEffects = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Remove Skill Level Up Effects", true, "Remove the VFX/SFX played when a skill gains a level.");
         _removeSkillLevelUpAlarm = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Remove Skill Level Up Alarm", true, "Remove the top-left or center message when a skill gains a level.");
         _removeEquipDelay = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Remove Equip Delay", true, "Equip and unequip items immediately instead of using Valheim's timed equip action.");
-        _preventDurabilityLossFromDamage = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Prevent Durability Loss From Damage", false, "Admin-only. Prevent equipped armor durability loss caused by taking damage.");
-        _preventDurabilityLossFromUse = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Prevent Durability Loss From Use", false, "Admin-only. Prevent equipped item durability loss caused by attacking, blocking, building, repairing, or passive use drain.");
+        _ignoreCraftingStationRoofRequirement = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Ignore Crafting Station Roof Requirement", true, "Admin-only. Ignore roof and exposure checks when using crafting stations. Fire requirements still apply.");
+        _preventDurabilityLossFromDamage = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Prevent Durability Loss From Damage", true, "Admin-only. Prevent equipped armor durability loss caused by taking damage.");
+        _preventDurabilityLossFromUse = Config.Bind(AdminQoLConfigSections.GameplayQoL, "Prevent Durability Loss From Use", true, "Admin-only. Prevent equipped item durability loss caused by attacking, blocking, building, repairing, or passive use drain.");
         ConsolePanelModule.Initialize(gameObject, Config);
 
         CustomItemSetManager.Initialize(Paths.ConfigPath);
@@ -102,7 +104,7 @@ public class AdminQoLPlugin : BaseUnityPlugin
 
     private void Update()
     {
-        if (_requireServerAdmin.Value || _preventDurabilityLossFromDamage.Value || _preventDurabilityLossFromUse.Value)
+        if (_requireServerAdmin.Value || _ignoreCraftingStationRoofRequirement.Value || _preventDurabilityLossFromDamage.Value || _preventDurabilityLossFromUse.Value)
         {
             PrimeServerAdminProbe();
         }
@@ -201,18 +203,25 @@ public class AdminQoLPlugin : BaseUnityPlugin
         return _removeEquipDelay.Value;
     }
 
+    internal static bool ShouldIgnoreCraftingStationRoofRequirement(Player player)
+    {
+        return _ignoreCraftingStationRoofRequirement.Value
+               && IsLocalPlayer(player)
+               && HasCachedServerAdminAccessForAdminOnlyFeature();
+    }
+
     internal static bool ShouldPreventDurabilityLossFromDamage(Player player)
     {
         return _preventDurabilityLossFromDamage.Value
                && IsLocalPlayer(player)
-               && HasCachedServerAdminAccessForDurability();
+               && HasCachedServerAdminAccessForAdminOnlyFeature();
     }
 
     internal static bool ShouldPreventDurabilityLossFromUse(Humanoid humanoid)
     {
         return _preventDurabilityLossFromUse.Value
                && IsLocalPlayer(humanoid)
-               && HasCachedServerAdminAccessForDurability();
+               && HasCachedServerAdminAccessForAdminOnlyFeature();
     }
 
     internal static ItemDurabilitySnapshot CaptureDurabilityForUse(Humanoid humanoid, ItemDrop.ItemData item)
@@ -250,17 +259,17 @@ public class AdminQoLPlugin : BaseUnityPlugin
         return false;
     }
 
-    private static bool HasCachedServerAdminAccessForDurability()
+    private static bool HasCachedServerAdminAccessForAdminOnlyFeature()
     {
         int frame = Time.frameCount;
-        if (_durabilityAdminAccessFrame == frame)
+        if (_adminOnlyFeatureAccessFrame == frame)
         {
-            return _durabilityAdminAccess;
+            return _adminOnlyFeatureAccess;
         }
 
-        _durabilityAdminAccessFrame = frame;
-        _durabilityAdminAccess = HasServerAdminAccess();
-        return _durabilityAdminAccess;
+        _adminOnlyFeatureAccessFrame = frame;
+        _adminOnlyFeatureAccess = HasServerAdminAccess();
+        return _adminOnlyFeatureAccess;
     }
 
     private static bool IsLocalPlayer(Humanoid humanoid)
@@ -498,6 +507,24 @@ internal static class SkillLevelUpAlarmPatch
         }
 
         return message.TrimStart().StartsWith("$msg_skillup ", StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+[HarmonyPatch(typeof(CraftingStation), nameof(CraftingStation.CheckUsable), new[] { typeof(Player), typeof(bool) })]
+internal static class IgnoreCraftingStationRoofRequirementPatch
+{
+    private static void Prefix(CraftingStation __instance, Player player, ref bool __state)
+    {
+        __state = __instance.m_craftRequireRoof;
+        if (__state && AdminQoLPlugin.ShouldIgnoreCraftingStationRoofRequirement(player))
+        {
+            __instance.m_craftRequireRoof = false;
+        }
+    }
+
+    private static void Postfix(CraftingStation __instance, bool __state)
+    {
+        __instance.m_craftRequireRoof = __state;
     }
 }
 
